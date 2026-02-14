@@ -1,7 +1,6 @@
 /**
- * OMENG BLASTER - QR FIRST, FALLBACK PAIRING
- * SAFE EXTREME (queue + limited parallel)
- * Node.js + @whiskeysockets/baileys
+ * OMENG BLASTER
+ * FIXED STARTUP BUG + QR FIRST + NO RECONNECT LOOP
  */
 
 const {
@@ -17,104 +16,111 @@ const chalk = require('chalk')
 const qrcode = require('qrcode-terminal')
 
 /* ================= CONFIG ================= */
-// ⚠️ Jangan set ekstrem berlebihan
 const SESSION_NAME = 'auth_session'
-const QR_TIMEOUT_MS = 60_000          // 60 detik nunggu scan QR
-const PARALLEL_SEND = 3               // paralel ringan (aman)
-const BASE_DELAY_MS = 900              // jeda dasar
-const JITTER_MS = 400                  // variasi acak
+const QR_TIMEOUT_MS = 60_000
 /* ========================================= */
 
 let sock
-let rl = null
-let isPairing = false
-let isConnected = false
-let pairingRequested = false
-let qrTimer = null
+let rl
 
-let blastData = { message: '', numbers: [] }
+// ===== STATE FLAGS =====
+let state = 'INIT' // INIT | QR | PAIRING | READY
+let hasShownQR = false
+let canReconnect = false
+let qrTimer = null
 
 /* ================= READLINE ================= */
 function initRL() {
-  if (rl) { rl.removeAllListeners(); rl.close() }
+  if (rl) {
+    rl.removeAllListeners()
+    rl.close()
+  }
   rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true
   })
 }
-const ask = q => new Promise(res => rl.question(q, res))
+const ask = q => new Promise(r => rl.question(q, r))
 
 /* ================= UI ================= */
 function header() {
-  if (isPairing) return
   console.clear()
   console.log(chalk.green.bold('========================================='))
-  console.log(chalk.cyan.bold('   ⚡ OMENG BLASTER : QR ➜ PAIRING ⚡    '))
-  console.log(chalk.yellow('   Safe Extreme | Queue + Parallel       '))
+  console.log(chalk.cyan.bold('     ⚡ OMENG BLASTER : STABLE ⚡        '))
+  console.log(chalk.yellow(`     STATE: ${state}                    `))
   console.log(chalk.green.bold('========================================='))
 }
 
 /* ================= CONNECT ================= */
 async function connectToWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState(SESSION_NAME)
+  const { state: auth, saveCreds } = await useMultiFileAuthState(SESSION_NAME)
 
   sock = makeWASocket({
     logger: pino({ level: 'silent' }),
-    auth: state,
+    auth,
     browser: ['Windows', 'Chrome', '120'],
-    keepAliveIntervalMs: 15000,
     connectTimeoutMs: 60000,
+    keepAliveIntervalMs: 15000,
     defaultQueryTimeoutMs: 0
   })
 
   sock.ev.on('creds.update', saveCreds)
 
-  // ===== QR HANDLER =====
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr && !isConnected && !pairingRequested) {
-      // tampilkan QR dulu
-      console.clear()
-      console.log(chalk.cyan.bold('=== SCAN QR WHATSAPP ==='))
-      qrcode.generate(qr, { small: true })
-      console.log(chalk.gray(`Menunggu scan QR (${QR_TIMEOUT_MS/1000}s)...`))
+  sock.ev.on('connection.update', async (u) => {
+    const { connection, qr, lastDisconnect } = u
 
-      if (qrTimer) clearTimeout(qrTimer)
+    /* ===== QR HANDLER ===== */
+    if (qr && !hasShownQR) {
+      hasShownQR = true
+      state = 'QR'
+      header()
+      console.log(chalk.cyan.bold('SCAN QR WHATSAPP'))
+      qrcode.generate(qr, { small: true })
+
       qrTimer = setTimeout(async () => {
-        // QR timeout → fallback pairing
-        if (!isConnected && !pairingRequested) {
-          pairingRequested = true
-          await startPairingFallback()
+        if (state !== 'READY') {
+          await startPairing()
         }
       }, QR_TIMEOUT_MS)
     }
 
+    /* ===== OPEN ===== */
     if (connection === 'open') {
       if (qrTimer) clearTimeout(qrTimer)
-      isConnected = true
-      isPairing = false
+      state = 'READY'
+      canReconnect = true
+      header()
+      console.log(chalk.green('LOGIN BERHASIL'))
       MenuUtama()
     }
 
+    /* ===== CLOSE ===== */
     if (connection === 'close') {
-      if (isPairing) return
-      const reason = lastDisconnect?.error?.output?.statusCode
-      if (reason !== DisconnectReason.loggedOut) {
+      const code = lastDisconnect?.error?.output?.statusCode
+
+      // ⛔ STOP TOTAL sebelum login
+      if (!canReconnect) return
+
+      if (code !== DisconnectReason.loggedOut) {
         console.log(chalk.yellow('Reconnect...'))
+        await delay(2000)
         connectToWhatsApp()
       } else {
-        console.log(chalk.red('Logout. Hapus auth_session.'))
+        console.log(chalk.red('Logout. Hapus auth_session'))
         process.exit(0)
       }
     }
   })
 }
 
-async function startPairingFallback() {
-  isPairing = true
+/* ================= PAIRING ================= */
+async function startPairing() {
+  state = 'PAIRING'
   initRL()
-  console.clear()
-  console.log(chalk.cyan.bold('=== FALLBACK PAIRING MANUAL ==='))
+  header()
+
+  console.log(chalk.cyan.bold('QR GAGAL → PAIRING MANUAL'))
 
   const num = await ask('Masukkan Nomor WA (628xxxx): ')
   const clean = num.replace(/\D/g, '')
@@ -124,9 +130,8 @@ async function startPairingFallback() {
     const code = raw.match(/.{1,4}/g).join('-')
     console.log(chalk.green.bold('\nKODE PAIRING:'))
     console.log(chalk.bgGreen.black.bold(` ${code} `))
-    console.log('\nWA > Perangkat Tertaut > Tautkan dg Nomor')
   } catch (e) {
-    console.log(chalk.red('Gagal pairing:'), e.message)
+    console.log('Pairing gagal:', e.message)
     process.exit(0)
   }
 }
@@ -135,87 +140,20 @@ async function startPairingFallback() {
 function MenuUtama() {
   initRL()
   header()
-  console.log(chalk.green('Status: ONLINE'))
-  console.log('[1] Mulai Blast')
+  console.log('[1] Test Kirim')
   console.log('[2] Keluar')
   process.stdout.write('> ')
-  rl.on('line', l => {
-    if (l.trim() === '1') InputPesan()
-    if (l.trim() === '2') process.exit(0)
-  })
-}
 
-function InputPesan() {
-  initRL()
-  header()
-  console.log('Masukkan Pesan (1 baris):')
-  process.stdout.write('> ')
-  rl.on('line', l => {
-    const msg = l.trim()
-    if (!msg) return
-    blastData.message = msg
-    InputNomor()
-  })
-}
-
-function InputNomor() {
-  initRL()
-  blastData.numbers = []
-  header()
-  console.log(`Pesan: ${chalk.cyan(blastData.message)}`)
-  console.log('Paste nomor. Ketik GAS untuk kirim.\n')
-  rl.on('line', l => {
-    const t = l.trim()
-    if (t.toUpperCase() === 'GAS') return EksekusiBlast()
-    const n = t.replace(/\D/g, '')
-    if (n.length >= 7) {
-      blastData.numbers.push(n)
-      process.stdout.write('.')
+  rl.on('line', async (l) => {
+    if (l === '1') {
+      await sock.sendMessage(sock.user.id, { text: 'TEST OK' })
+      console.log('Terkirim ke diri sendiri')
     }
+    if (l === '2') process.exit(0)
   })
-}
-
-/* ================= BLAST (SAFE EXTREME) ================= */
-async function EksekusiBlast() {
-  initRL()
-  if (!blastData.numbers.length) {
-    console.log('Nomor kosong.')
-    await delay(1000)
-    return MenuUtama()
-  }
-
-  console.log(`\nMengirim ke ${blastData.numbers.length} nomor...\n`)
-
-  let ok = 0, fail = 0
-  const queue = [...blastData.numbers]
-
-  async function worker() {
-    while (queue.length) {
-      const num = queue.shift()
-      try {
-        await sock.sendMessage(num + '@s.whatsapp.net', { text: blastData.message })
-        ok++
-        console.log(chalk.green('✓'), num)
-      } catch {
-        fail++
-        console.log(chalk.red('✗'), num)
-      }
-      const jitter = Math.floor(Math.random() * JITTER_MS)
-      await delay(BASE_DELAY_MS + jitter)
-    }
-  }
-
-  const workers = Array.from({ length: PARALLEL_SEND }, worker)
-  await Promise.all(workers)
-
-  console.log('\n=== LAPORAN ===')
-  console.log('SUKSES:', ok)
-  console.log('GAGAL :', fail)
-  console.log('\nTekan ENTER untuk kembali')
-  rl.once('line', MenuUtama)
 }
 
 /* ================= START ================= */
 process.on('SIGINT', () => process.exit(0))
-console.clear()
+header()
 connectToWhatsApp()
