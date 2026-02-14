@@ -7,71 +7,76 @@ const qrcode = require('qrcode-terminal');
 const sessionName = 'auth_session';
 let sock;
 let isConnected = false;
+let isAuthenticating = false;
 
-// SATU READLINE GLOBAL (Sesuai arahan GPT biar gak ghosting)
+// 1. SATU READLINE GLOBAL (Anti-Ghosting & Double Listener)
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    terminal: true
+    terminal: true 
 });
 
 let blastData = { message: '', numbers: [] };
 
+// Helper Tanya
 const ask = (query) => new Promise((resolve) => rl.question(query, resolve));
 
 const showHeader = () => {
+    if (isAuthenticating) return; // Kunci UI kalau lagi proses login
     console.clear();
     console.log(chalk.green.bold('========================================='));
-    console.log(chalk.cyan.bold('     ⚡ OMENG BLASTER V4 : DUAL MODE ⚡   '));
-    console.log(chalk.yellow('      QR Code & Pairing Manual Ready     '));
+    console.log(chalk.cyan.bold('    ⚡ OMENG ULTIMATE BLASTER V5 ⚡    '));
+    console.log(chalk.yellow('      Stable UI | Dual-Auth | VPS Ready   '));
     console.log(chalk.green.bold('========================================='));
 };
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionName);
     
-    // Setup Socket Dasar
+    // Setup Socket (Pake browser MacOS biar lebih di-trust server WA)
     sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: Browsers.ubuntu('Chrome'),
+        browser: Browsers.macOS('Chrome'),
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0,
-        keepAliveIntervalMs: 10000
+        keepAliveIntervalMs: 15000,
+        syncFullHistory: false
     });
 
-    // --- LOGIC AUTHENTICATION ---
+    // --- PROSES LOGIN ---
     if (!sock.authState.creds.me) {
+        isAuthenticating = true;
         showHeader();
         console.log(chalk.white('Pilih Metode Login:'));
-        console.log('[1] Scan QR Code');
+        console.log('[1] Scan QR Code (Manual)');
         console.log('[2] Pairing Code (Nomor HP)');
-        const choice = await ask(chalk.yellow('\nPilih (1/2) > '));
+        
+        const choice = await ask(chalk.cyan('\nPilih (1/2) > '));
 
         if (choice === '1') {
-            console.log(chalk.gray('\nMenunggu QR Code dari server...'));
+            console.log(chalk.yellow('\nMenunggu QR Code...'));
             sock.ev.on('connection.update', (update) => {
                 const { qr } = update;
                 if (qr) {
                     console.clear();
-                    console.log(chalk.yellow('SCAN QR INI DENGAN WA KAMU:\n'));
+                    console.log(chalk.green('SCAN QR INI DENGAN WHATSAPP LO:\n'));
                     qrcode.generate(qr, { small: true });
-                    console.log(chalk.gray('\nQR akan kadaluarsa dlm 30 detik.'));
+                    console.log(chalk.gray('\nQR expired dlm 30 detik.'));
                 }
             });
-        } else if (choice === '2') {
-            const num = await ask(chalk.yellow('\nMasukkan Nomor WA (628xxx): '));
+        } else {
+            const num = await ask(chalk.yellow('\nMasukkan Nomor WA (cth: 628xxx): '));
             const cleanNum = num.replace(/[^0-9]/g, '');
             if (cleanNum) {
-                console.log(chalk.gray('\nSabar, menghubungkan socket... (10 detik)'));
-                await delay(10000); 
+                console.log(chalk.gray('\nStabilitasi koneksi... (Tunggu 10 detik)'));
+                await delay(10000); // Jeda wajib biar gak Error 428/405
                 try {
                     let code = await sock.requestPairingCode(cleanNum);
                     code = code?.match(/.{1,4}/g)?.join("-") || code;
                     console.log(chalk.green.bold('\n✅ KODE PAIRING: ') + chalk.bgGreen.black.bold(` ${code} `));
                     console.log(chalk.white('\nInput di: WA > Perangkat Tertaut > Tautkan dg Nomor.'));
                 } catch (e) {
-                    console.log(chalk.red(`\n❌ Error: ${e.message}. Re-run script!`));
+                    console.log(chalk.red(`\n❌ Gagal: ${e.message}. Silakan restart script.`));
                     process.exit(0);
                 }
             }
@@ -85,9 +90,8 @@ async function connectToWhatsApp() {
         if (connection === 'close') {
             isConnected = false;
             const reason = lastDisconnect?.error?.output?.statusCode;
-            // Jika ditutup paksa (Connection Closed), coba sambung lagi
             if (reason !== DisconnectReason.loggedOut) {
-                console.log(chalk.red(`\nKoneksi Terputus (${reason}). Reconnecting...`));
+                console.log(chalk.red(`\nKoneksi Down (${reason}). Nyambung lagi...`));
                 connectToWhatsApp();
             } else {
                 console.log(chalk.red('\nSesi Logout. Hapus folder auth_session!'));
@@ -95,31 +99,34 @@ async function connectToWhatsApp() {
             }
         } else if (connection === 'open') {
             isConnected = true;
-            console.log(chalk.green('\n✅ TERHUBUNG! Mantap, Meng.'));
+            isAuthenticating = false;
+            console.log(chalk.green('\n✅ BERHASIL LOGIN! Mantap, Meng.'));
             setTimeout(() => MenuUtama(), 2000);
         }
     });
 }
 
 function MenuUtama() {
-    if (!isConnected) return;
-    rl.removeAllListeners('line'); 
+    if (!isConnected || isAuthenticating) return;
+    rl.removeAllListeners('line'); // Reset listener biar gak double enter
     showHeader();
     console.log(chalk.green('✅ Status: ONLINE'));
     console.log('\n[1] Mulai Blast Baru');
     console.log('[2] Keluar');
-    process.stdout.write(chalk.cyan('\nPilih > '));
+    process.stdout.write(chalk.cyan('\nPilih Menu > '));
 
     rl.on('line', (line) => {
-        if (line.trim() === '1') InputPesan();
-        else if (line.trim() === '2') process.exit(0);
+        const input = line.trim();
+        if (input === '1') InputPesan();
+        else if (input === '2') process.exit(0);
     });
 }
 
 function InputPesan() {
     rl.removeAllListeners('line');
     showHeader();
-    process.stdout.write(chalk.yellow('\nLangkah 1: Tulis Pesan\n> '));
+    console.log(chalk.yellow('Langkah 1/2: TULIS PESAN'));
+    process.stdout.write(chalk.cyan('Pesan: '));
     rl.on('line', (line) => {
         const msg = line.trim();
         if (msg) {
@@ -134,7 +141,8 @@ function InputNomor() {
     blastData.numbers = [];
     showHeader();
     console.log(chalk.white(`Pesan: "${chalk.cyan(blastData.message)}"`));
-    console.log(chalk.yellow('\nLangkah 2: Paste Nomor. Ketik "GAS" untuk kirim.'));
+    console.log(chalk.yellow('\nLangkah 2/2: PASTE NOMOR'));
+    console.log(chalk.gray('Ketik "GAS" kalau sudah semua nomor ditempel.'));
     
     rl.on('line', (line) => {
         const input = line.trim();
@@ -153,20 +161,23 @@ function InputNomor() {
 async function Eksekusi() {
     rl.removeAllListeners('line');
     if (blastData.numbers.length === 0) return MenuUtama();
-    console.log(chalk.yellow(`\n\n🔄 Mengirim ke ${blastData.numbers.length} nomor...`));
+
+    console.log(chalk.yellow(`\n\n🔄 Meluncur ke ${blastData.numbers.length} nomor...`));
     
     for (const num of blastData.numbers) {
         try {
             await sock.sendMessage(num + '@s.whatsapp.net', { text: blastData.message });
-            console.log(chalk.green(`✅ ${num} Terkirim`));
+            console.log(chalk.green(`[✅] ${num} Terkirim`));
         } catch (e) {
-            console.log(chalk.red(`❌ ${num} Gagal`));
+            console.log(chalk.red(`[❌] ${num} Gagal`));
         }
-        await delay(2000); // Jeda 2 detik (lebih aman)
+        await delay(2000); // Jeda 2 detik biar aman dari ban
     }
 
-    console.log(chalk.bold('\nSELESAI. Tekan Enter balik ke menu.'));
+    console.log(chalk.bold('\nBERES! Tekan Enter buat balik ke menu.'));
     rl.once('line', () => MenuUtama());
 }
 
+// Jalankan sistem
+console.clear();
 connectToWhatsApp();
