@@ -1,0 +1,16 @@
+{
+  "name": "omeng-blaster",
+  "version": "1.0.0",
+  "description": "WhatsApp Instant Blaster Tool",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.6.0",
+    "chalk": "^4.1.2",
+    "pino": "^7.0.0"
+  },
+  "author": "Omeng",
+  "license": "ISC"
+}
