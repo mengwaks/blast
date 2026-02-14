@@ -7,27 +7,23 @@ const sessionName = 'auth_session';
 let sock;
 let rl;
 
-// --- CONFIG USER ---
-// Ganti ke 'true' kalau mau mode Pairing Code (Rekomendasi Termux)
-const usePairingCode = true; 
-
+// Data Blaster
 let blastData = {
     message: '',
     numbers: []
 };
 
-// Interface Baca Input
+// Fungsi Input yang Stabil
 const question = (text) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const rlInterface = readline.createInterface({ input: process.stdin, output: process.stdout });
     return new Promise((resolve) => {
-        rl.question(text, (answer) => {
-            rl.close();
+        rlInterface.question(text, (answer) => {
+            rlInterface.close();
             resolve(answer);
         });
     });
 };
 
-// Interface Panel Menu
 function createInterface() {
     if (rl) { rl.removeAllListeners(); rl.close(); }
     rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
@@ -37,7 +33,7 @@ const showHeader = () => {
     console.clear();
     console.log(chalk.green.bold('========================================='));
     console.log(chalk.cyan.bold('     ⚡ OMENG BLASTER : PAIRING MODE ⚡   '));
-    console.log(chalk.yellow('     Tanpa Scan QR | Anti Error 405      '));
+    console.log(chalk.yellow('     Status: Stable | Anti-Ghosting      '));
     console.log(chalk.green.bold('========================================='));
 };
 
@@ -45,28 +41,41 @@ async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionName);
     
     sock = makeWASocket({
-        logger: pino({ level: 'silent' }), // Silent biar rapi
-        printQRInTerminal: !usePairingCode, // Matikan QR kalau pakai Pairing
+        logger: pino({ level: 'silent' }),
         auth: state,
-        browser: Browsers.macOS('Chrome'), // Gunakan browser Mac biar Trust Score tinggi
+        // Pake Firefox biar lebih aman dari deteksi bot
+        browser: Browsers.appropriate('Firefox'), 
         connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 10000,
+        keepAliveIntervalMs: 15000,
         syncFullHistory: false
     });
 
-    // --- LOGIC PAIRING CODE (ANTI RIBET) ---
-    if (usePairingCode && !sock.authState.creds.me) {
-        console.clear();
-        const phoneNumber = await question(chalk.yellow('Masukkan Nomor WhatsApp Kamu (Awali 62/1, cth: 62812345678): '));
+    // --- LOGIC PAIRING CODE (FIXED) ---
+    if (!sock.authState.creds.me) {
+        showHeader();
+        console.log(chalk.white('Sesi belum login. Menyiapkan sistem pairing...'));
         
-        // Request Kode
-        setTimeout(async () => {
-            let code = await sock.requestPairingCode(phoneNumber);
-            code = code?.match(/.{1,4}/g)?.join("-") || code;
-            console.log(chalk.green.bold('\n✅ KODE PAIRING KAMU: '));
-            console.log(chalk.bgGreen.black.bold(`   ${code}   `));
-            console.log(chalk.white('\nBuka WA > Perangkat Tertaut > Tautkan dengan Nomor > Masukkan Kode di atas.'));
-        }, 3000);
+        // Minta nomor dulu, baru eksekusi pairing
+        const phoneNumber = await question(chalk.yellow('\nMasukkan Nomor WA (cth: 62812345678): '));
+        const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+
+        if (cleanNumber) {
+            console.log(chalk.gray('Sedang meminta kode ke server WhatsApp...'));
+            try {
+                // Kasih delay biar server gak kaget (cegah Error 428)
+                await delay(3000); 
+                let code = await sock.requestPairingCode(cleanNumber);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
+                
+                console.log(chalk.green.bold('\n✅ KODE PAIRING KAMU: '));
+                console.log(chalk.bgGreen.black.bold(`   ${code}   `));
+                console.log(chalk.white('\nCara Pakai: WA > Perangkat Tertaut > Tautkan dengan Nomor.'));
+            } catch (err) {
+                console.log(chalk.red(`\n❌ Gagal dapet kode: ${err.message}`));
+                console.log(chalk.yellow('Saran: Tunggu 1 menit, hapus folder auth_session, lalu coba lagi.'));
+                process.exit(0);
+            }
+        }
     }
 
     sock.ev.on('creds.update', saveCreds);
@@ -76,19 +85,19 @@ async function connectToWhatsApp() {
         
         if (connection === 'close') {
             const reason = (lastDisconnect.error)?.output?.statusCode;
-            console.log(chalk.red(`❌ Koneksi Terputus: ${reason}`));
-            // Auto Reconnect kecuali Logout/Banned
-            if(reason !== DisconnectReason.loggedOut && reason !== 401) {
+            if(reason === 428) {
+                console.log(chalk.red('\n[Error 428] Server WA nolak. Jangan spam jalankan script! Tunggu 5 menit.'));
+                process.exit(0);
+            } else if(reason !== DisconnectReason.loggedOut) {
+                console.log(chalk.gray('Mencoba menyambungkan ulang...'));
                 connectToWhatsApp();
             } else {
-                console.log(chalk.red('Sesi Mati. Silakan hapus auth_session dan login ulang.'));
+                console.log(chalk.red('\nSesi Logout. Hapus folder auth_session dan scan ulang.'));
                 process.exit(0);
             }
         } else if (connection === 'open') {
-            console.log(chalk.green('\n✅ BERHASIL LOGIN!'));
-            setTimeout(() => {
-                MenuUtama();
-            }, 2000);
+            console.log(chalk.green('\n✅ BERHASIL LOGIN! Selamat nge-blast, Meng.'));
+            setTimeout(() => MenuUtama(), 2000);
         }
     });
 }
@@ -112,15 +121,15 @@ function InputPesan() {
     createInterface();
     showHeader();
     console.log(chalk.yellow('Langkah 1/3: MASUKKAN TEXT'));
-    console.log(chalk.gray('(Ketik "0" kembali)'));
     process.stdout.write(chalk.cyan('Tulis Pesan: '));
 
     rl.on('line', (line) => {
         const msg = line.trim();
         if (msg === '0') return MenuUtama();
-        if (!msg) return;
-        blastData.message = msg;
-        InputNomor();
+        if (msg) {
+            blastData.message = msg;
+            InputNomor();
+        }
     });
 }
 
@@ -131,14 +140,12 @@ function InputNomor() {
     console.log(chalk.yellow('Langkah 2/3: INPUT NOMOR'));
     console.log(chalk.white(`Pesan: "${chalk.cyan(blastData.message)}"`));
     console.log(chalk.bold.white('\nINSTRUKSI:'));
-    console.log('1. Paste 70 nomor di bawah.');
-    console.log('2. Tekan Enter.');
-    console.log(`3. Ketik "${chalk.red.bold('GAS')}" untuk kirim.`);
-    console.log(chalk.yellow('Silakan Paste:'));
+    console.log('1. Paste nomor di bawah.');
+    console.log(`2. Ketik "${chalk.red.bold('GAS')}" untuk kirim.`);
+    console.log(chalk.yellow('\nSilakan Paste:'));
 
     rl.on('line', (line) => {
         const input = line.trim();
-        if (input === '0') return MenuUtama();
         if (input.toUpperCase() === 'GAS') {
             EksekusiBlast();
         } else {
@@ -156,43 +163,40 @@ async function EksekusiBlast() {
     const targets = blastData.numbers;
     
     if (targets.length === 0) {
-        console.log(chalk.red('\n❌ Nomor kosong!'));
+        console.log(chalk.red('\n❌ Nomor belum diisi!'));
         setTimeout(InputNomor, 2000);
         return;
     }
 
     console.log(chalk.yellow(`\n\n🔄 Mengirim ke ${targets.length} nomor...`));
-    console.log(chalk.cyan.bold(`🚀 MELUNCUR DALAM 3 DETIK...`));
-    await delay(3000);
+    await delay(2000);
 
     let successCount = 0;
     let failCount = 0;
 
-    const tasks = targets.map(async (rawNumber) => {
+    for (const rawNumber of targets) {
         const jid = rawNumber + '@s.whatsapp.net';
         try {
             await sock.sendMessage(jid, { text: blastData.message });
             successCount++;
-            return { number: rawNumber, status: '✅ OK' };
+            console.log(chalk.green(`[✅] ${rawNumber} Terkirim`));
         } catch (error) {
             failCount++;
-            return { number: rawNumber, status: '❌ FAIL' };
+            console.log(chalk.red(`[❌] ${rawNumber} Gagal`));
         }
-    });
+        // Jeda 1 detik antar pesan biar gak kena ban (Safety First)
+        await delay(1000); 
+    }
 
-    const results = await Promise.all(tasks);
-    
     console.log(chalk.bold('\n=== LAPORAN ==='));
-    results.forEach((res, i) => {
-        console.log(`${i+1}. ${res.number} : ${res.status === '✅ OK' ? chalk.green(res.status) : chalk.red(res.status)}`);
-    });
-    console.log(chalk.white(`\nSUKSES: ${successCount} | GAGAL: ${failCount}`));
+    console.log(chalk.green(`SUKSES: ${successCount}`));
+    console.log(chalk.red(`GAGAL  : ${failCount}`));
     
-    console.log(chalk.yellow('\nTekan ENTER untuk kembali...'));
+    console.log(chalk.yellow('\nTekan ENTER untuk kembali ke Menu Utama...'));
     createInterface();
     rl.question('', () => MenuUtama());
 }
 
-process.on('SIGINT', function() { console.log(chalk.red('\nKeluar...')); process.exit(); });
+process.on('SIGINT', function() { process.exit(); });
 console.clear();
 connectToWhatsApp();
