@@ -40,7 +40,7 @@ async function connectToWhatsApp() {
 
     sock = makeWASocket({
         // Ganti ke 'info' biar error kelihatan
-        logger: pino({ level: 'info' }), 
+        logger: pino({ level: 'silent' }),
         auth: state,
         // Browser kita samakan dengan Firefox Linux biar server WA tidak curiga
         browser: ["Ubuntu", "Chrome", "20.0.04"],
