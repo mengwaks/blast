@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, delay } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const readline = require('readline');
 const chalk = require('chalk');
@@ -32,38 +32,41 @@ function createInterface() {
 const showHeader = () => {
     console.clear();
     console.log(chalk.green.bold('========================================='));
-    console.log(chalk.cyan.bold('     ⚡ OMENG BLASTER : PAIRING MODE ⚡   '));
-    console.log(chalk.yellow('     Status: Stable | Anti-Ghosting      '));
+    console.log(chalk.cyan.bold('     ⚡ OMENG BLASTER : ULTRA STABLE ⚡   '));
+    console.log(chalk.yellow('     Mode: Pairing Code | Anti-Ghosting   '));
     console.log(chalk.green.bold('========================================='));
 };
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionName);
     
+    // Konfigurasi Browser & Timeout paling aman
     sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        // Pake Firefox biar lebih aman dari deteksi bot
-        browser: Browsers.appropriate('Firefox'), 
+        // Gunakan identitas Chrome Windows asli biar gak di-kick server
+        browser: ["Windows", "Chrome", "110.0.5481.178"],
         connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 15000,
+        defaultQueryTimeoutMs: 0,
+        keepAliveIntervalMs: 10000,
         syncFullHistory: false
     });
 
-    // --- LOGIC PAIRING CODE (FIXED) ---
+    // --- LOGIC PAIRING CODE (ANTI CONNECTION CLOSED) ---
     if (!sock.authState.creds.me) {
         showHeader();
-        console.log(chalk.white('Sesi belum login. Menyiapkan sistem pairing...'));
+        console.log(chalk.white('Sesi baru terdeteksi. Menyiapkan pairing...'));
         
-        // Minta nomor dulu, baru eksekusi pairing
         const phoneNumber = await question(chalk.yellow('\nMasukkan Nomor WA (cth: 62812345678): '));
         const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
 
         if (cleanNumber) {
-            console.log(chalk.gray('Sedang meminta kode ke server WhatsApp...'));
+            console.log(chalk.gray('\nMenghubungkan ke socket...'));
+            // JEDA 10 DETIK: Sangat penting biar socket stabil dulu sebelum minta kode
+            console.log(chalk.gray('Menunggu 10 detik agar koneksi stabil (Sabar ya, Meng)...'));
+            await delay(10000); 
+
             try {
-                // Kasih delay biar server gak kaget (cegah Error 428)
-                await delay(3000); 
                 let code = await sock.requestPairingCode(cleanNumber);
                 code = code?.match(/.{1,4}/g)?.join("-") || code;
                 
@@ -72,7 +75,7 @@ async function connectToWhatsApp() {
                 console.log(chalk.white('\nCara Pakai: WA > Perangkat Tertaut > Tautkan dengan Nomor.'));
             } catch (err) {
                 console.log(chalk.red(`\n❌ Gagal dapet kode: ${err.message}`));
-                console.log(chalk.yellow('Saran: Tunggu 1 menit, hapus folder auth_session, lalu coba lagi.'));
+                console.log(chalk.yellow('Saran: Matikan-Nyalakan Mode Pesawat, hapus auth_session, coba lagi.'));
                 process.exit(0);
             }
         }
@@ -85,10 +88,9 @@ async function connectToWhatsApp() {
         
         if (connection === 'close') {
             const reason = (lastDisconnect.error)?.output?.statusCode;
-            if(reason === 428) {
-                console.log(chalk.red('\n[Error 428] Server WA nolak. Jangan spam jalankan script! Tunggu 5 menit.'));
-                process.exit(0);
-            } else if(reason !== DisconnectReason.loggedOut) {
+            console.log(chalk.red(`\nKoneksi Terputus (Code: ${reason})`));
+            
+            if(reason !== DisconnectReason.loggedOut) {
                 console.log(chalk.gray('Mencoba menyambungkan ulang...'));
                 connectToWhatsApp();
             } else {
@@ -184,7 +186,7 @@ async function EksekusiBlast() {
             failCount++;
             console.log(chalk.red(`[❌] ${rawNumber} Gagal`));
         }
-        // Jeda 1 detik antar pesan biar gak kena ban (Safety First)
+        // Jeda 1 detik antar pesan biar gak kena ban
         await delay(1000); 
     }
 
