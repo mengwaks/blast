@@ -2,6 +2,7 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = requi
 const pino = require('pino');
 const readline = require('readline');
 const chalk = require('chalk');
+const qrcode = require('qrcode-terminal'); // Tambahan library baru
 
 const sessionName = 'auth_session';
 let sock;
@@ -37,7 +38,7 @@ async function connectToWhatsApp() {
     
     sock = makeWASocket({
         logger: pino({ level: 'silent' }),
-        printQRInTerminal: true,
+        // printQRInTerminal: true,  <-- INI YANG BIKIN ERROR (SUDAH DIHAPUS)
         auth: state,
         browser: ["Omeng Panel", "Chrome", "1.0.0"],
         connectTimeoutMs: 60000, 
@@ -48,7 +49,14 @@ async function connectToWhatsApp() {
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+        
+        // --- LOGIC QR CODE BARU ---
+        if (qr) {
+            console.log(chalk.yellow('\nSilakan Scan QR Code di bawah ini:'));
+            qrcode.generate(qr, { small: true }); // Tampilkan QR Manual
+        }
+        // --------------------------
         
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
