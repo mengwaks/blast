@@ -2,7 +2,7 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = requi
 const pino = require('pino');
 const readline = require('readline');
 const chalk = require('chalk');
-const qrcode = require('qrcode-terminal'); // Tambahan library baru
+const qrcode = require('qrcode-terminal'); 
 
 const sessionName = 'auth_session';
 let sock;
@@ -28,19 +28,22 @@ function createInterface() {
 const showHeader = () => {
     console.clear();
     console.log(chalk.green.bold('========================================='));
-    console.log(chalk.cyan.bold('      ⚡ OMENG ULTIMATE BLASTER ⚡       '));
-    console.log(chalk.yellow('      Speed: Instant | Report: Active    '));
+    console.log(chalk.cyan.bold('      ⚡ OMENG BLASTER (DEBUG MODE) ⚡   '));
+    console.log(chalk.yellow('      Cek log di bawah jika stuck...     '));
     console.log(chalk.green.bold('========================================='));
 };
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionName);
     
+    console.log(chalk.gray('Memulai socket...'));
+
     sock = makeWASocket({
-        logger: pino({ level: 'silent' }),
-        // printQRInTerminal: true,  <-- INI YANG BIKIN ERROR (SUDAH DIHAPUS)
+        // Ganti ke 'info' biar error kelihatan
+        logger: pino({ level: 'info' }), 
         auth: state,
-        browser: ["Omeng Panel", "Chrome", "1.0.0"],
+        // Browser kita samakan dengan Firefox Linux biar server WA tidak curiga
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
         connectTimeoutMs: 60000, 
         keepAliveIntervalMs: 10000,
         syncFullHistory: false
@@ -51,17 +54,33 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        // --- LOGIC QR CODE BARU ---
-        if (qr) {
-            console.log(chalk.yellow('\nSilakan Scan QR Code di bawah ini:'));
-            qrcode.generate(qr, { small: true }); // Tampilkan QR Manual
+        // --- LOG LOGIC ---
+        // Kita print status update biar tau lagi ngapain
+        if(update.isNewLogin) {
+             console.log(chalk.blue('Status: Menunggu Login Baru...'));
         }
-        // --------------------------
+        
+        if (qr) {
+            console.log(chalk.yellow('\n✅ QR CODE DITERIMA DARI SERVER!'));
+            console.log(chalk.yellow('Silakan Scan sekarang (Gunakan WA Business/HP Kedua):'));
+            // Generate QR Small
+            qrcode.generate(qr, { small: true });
+        }
         
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if(shouldReconnect) connectToWhatsApp();
+            const reason = (lastDisconnect.error)?.output?.statusCode;
+            console.log(chalk.red(`❌ Koneksi Terputus. Kode Error: ${reason}`));
+            
+            const shouldReconnect = reason !== DisconnectReason.loggedOut;
+            if(shouldReconnect) {
+                console.log('Mencoba menyambungkan ulang...');
+                connectToWhatsApp();
+            } else {
+                console.log('Sesi Logout. Silakan hapus folder auth_session dan scan ulang.');
+                process.exit(0);
+            }
         } else if (connection === 'open') {
+            console.log(chalk.green('\n✅ BERHASIL TERHUBUNG!'));
             setTimeout(() => {
                 MenuUtama();
             }, 1000);
