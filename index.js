@@ -7,55 +7,65 @@ const sessionName = 'auth_session';
 let sock;
 let isConnected = false;
 
-// 1. GLOBAL READLINE INTERFACE (Satu Pintu Utama)
+// GLOBAL READLINE
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    terminal: true // Sesuai saran GPT, biar gak ghosting
+    terminal: true
 });
 
-// Data Project
 let blastData = { message: '', numbers: [] };
 
-// Helper Tanya (Biar ringkas)
 const ask = (query) => new Promise((resolve) => rl.question(query, resolve));
 
 const showHeader = () => {
     console.clear();
     console.log(chalk.green.bold('========================================='));
-    console.log(chalk.cyan.bold('     ⚡ OMENG BLASTER V2 (ULTIMATE) ⚡   '));
-    console.log(chalk.yellow('      Global Interface | Anti-Glitch     '));
+    console.log(chalk.cyan.bold('     ⚡ OMENG BLASTER V3 (STABLE) ⚡     '));
+    console.log(chalk.yellow('      Proses Pairing Lebih Sabar...      '));
     console.log(chalk.green.bold('========================================='));
 };
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(sessionName);
     
+    // Pake identitas Chrome MacOS (Lebih di-trust WA)
     sock = makeWASocket({
         logger: pino({ level: 'silent' }),
         auth: state,
-        browser: Browsers.ubuntu('Chrome'),
+        browser: ["Mac OS", "Chrome", "110.0.5481.178"],
         connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 0,
+        keepAliveIntervalMs: 10000,
+        generateHighQualityLinkPreview: false,
         syncFullHistory: false
     });
 
     // --- LOGIC PAIRING (LOCK MODE) ---
     if (!sock.authState.creds.me) {
         showHeader();
-        console.log(chalk.white('Status: Belum Login.'));
+        console.log(chalk.white('Sesi Baru Terdeteksi.'));
+        
         const num = await ask(chalk.yellow('\nMasukkan Nomor WA (628xxx): '));
         const cleanNum = num.replace(/[^0-9]/g, '');
 
         if (cleanNum) {
-            console.log(chalk.gray('Meminta kode ke server...'));
-            await delay(5000);
+            console.log(chalk.gray('\n[!] Menghubungkan ke server (Sabar, jangan di-close)...'));
+            
+            // Trik Inti: Tunggu socket bener-bener 'ngobrol' sama server WA
+            await delay(10000); 
+
             try {
+                console.log(chalk.gray('[!] Meminta kode pairing...'));
                 let code = await sock.requestPairingCode(cleanNum);
                 code = code?.match(/.{1,4}/g)?.join("-") || code;
-                console.log(chalk.green.bold('\n✅ KODE PAIRING: ') + chalk.bgGreen.black.bold(` ${code} `));
+                
+                console.log(chalk.green.bold('\n✅ KODE PAIRING ANDA: '));
+                console.log(chalk.bgGreen.black.bold(`   ${code}   `));
                 console.log(chalk.white('\nInput di: WA > Perangkat Tertaut > Tautkan dg Nomor.'));
             } catch (err) {
-                console.log(chalk.red('\nGagal dapet kode. Re-run script!'));
+                console.log(chalk.red(`\n❌ Gagal: ${err.message}`));
+                console.log(chalk.yellow('Saran: Matikan & Nyalakan Data HP, lalu coba lagi.'));
                 process.exit(0);
             }
         }
@@ -69,7 +79,6 @@ async function connectToWhatsApp() {
             isConnected = false;
             const reason = (lastDisconnect.error)?.output?.statusCode;
             if (reason !== DisconnectReason.loggedOut) connectToWhatsApp();
-            else process.exit(0);
         } else if (connection === 'open') {
             isConnected = true;
             console.log(chalk.green('\n✅ TERHUBUNG!'));
@@ -80,7 +89,7 @@ async function connectToWhatsApp() {
 
 function MenuUtama() {
     if (!isConnected) return;
-    rl.removeAllListeners('line'); // Bersihin kuping
+    rl.removeAllListeners('line');
     showHeader();
     console.log(chalk.green('✅ Status: ONLINE'));
     console.log('\n[1] Mulai Blast Baru');
@@ -147,5 +156,4 @@ async function Eksekusi() {
     rl.once('line', () => MenuUtama());
 }
 
-// Jalankan
 connectToWhatsApp();
