@@ -1,13 +1,13 @@
 /**
  * OMENG BLASTER
- * FIXED STARTUP BUG + QR FIRST + NO RECONNECT LOOP
+ * QR FIRST → PAIRING MANUAL
+ * NO STUCK | NO AUTO EXIT | NO RECONNECT LOOP
  */
 
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  delay
 } = require('@whiskeysockets/baileys')
 
 const pino = require('pino')
@@ -16,98 +16,79 @@ const chalk = require('chalk')
 const qrcode = require('qrcode-terminal')
 
 /* ================= CONFIG ================= */
-const SESSION_NAME = 'auth_session'
-const QR_TIMEOUT_MS = 60_000
+const SESSION = 'auth_session'
 /* ========================================= */
 
 let sock
 let rl
+let loggedIn = false
+let pairingMode = false
 
-// ===== STATE FLAGS =====
-let state = 'INIT' // INIT | QR | PAIRING | READY
-let hasShownQR = false
-let canReconnect = false
-let qrTimer = null
+/* ================= READLINE (KEEP ALIVE) ================= */
+rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  terminal: true
+})
 
-/* ================= READLINE ================= */
-function initRL() {
-  if (rl) {
-    rl.removeAllListeners()
-    rl.close()
-  }
-  rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: true
-  })
-}
-const ask = q => new Promise(r => rl.question(q, r))
+// ⛔ penting: ini bikin process TIDAK exit
+rl.on('SIGINT', () => process.exit(0))
 
 /* ================= UI ================= */
-function header() {
+function header(text = '') {
   console.clear()
   console.log(chalk.green.bold('========================================='))
   console.log(chalk.cyan.bold('     ⚡ OMENG BLASTER : STABLE ⚡        '))
-  console.log(chalk.yellow(`     STATE: ${state}                    `))
+  if (text) console.log(chalk.yellow(text))
   console.log(chalk.green.bold('========================================='))
 }
 
 /* ================= CONNECT ================= */
-async function connectToWhatsApp() {
-  const { state: auth, saveCreds } = await useMultiFileAuthState(SESSION_NAME)
+async function start() {
+  header('Starting WhatsApp Socket...')
+
+  const { state, saveCreds } = await useMultiFileAuthState(SESSION)
 
   sock = makeWASocket({
+    auth: state,
     logger: pino({ level: 'silent' }),
-    auth,
-    browser: ['Windows', 'Chrome', '120'],
-    connectTimeoutMs: 60000,
-    keepAliveIntervalMs: 15000,
-    defaultQueryTimeoutMs: 0
+    browser: ['Windows', 'Chrome', '120']
   })
 
   sock.ev.on('creds.update', saveCreds)
 
-  sock.ev.on('connection.update', async (u) => {
-    const { connection, qr, lastDisconnect } = u
+  sock.ev.on('connection.update', async ({ connection, qr, lastDisconnect }) => {
 
-    /* ===== QR HANDLER ===== */
-    if (qr && !hasShownQR) {
-      hasShownQR = true
-      state = 'QR'
-      header()
-      console.log(chalk.cyan.bold('SCAN QR WHATSAPP'))
+    /* ===== QR MODE ===== */
+    if (qr && !loggedIn && !pairingMode) {
+      header('SCAN QR WHATSAPP')
       qrcode.generate(qr, { small: true })
+      console.log('\nTunggu scan QR...')
+      console.log('Jika QR tidak discan, tekan ENTER untuk pairing manual.')
 
-      qrTimer = setTimeout(async () => {
-        if (state !== 'READY') {
-          await startPairing()
-        }
-      }, QR_TIMEOUT_MS)
+      rl.once('line', async () => {
+        pairingMode = true
+        await pairingManual()
+      })
     }
 
-    /* ===== OPEN ===== */
+    /* ===== LOGIN SUCCESS ===== */
     if (connection === 'open') {
-      if (qrTimer) clearTimeout(qrTimer)
-      state = 'READY'
-      canReconnect = true
-      header()
-      console.log(chalk.green('LOGIN BERHASIL'))
-      MenuUtama()
+      loggedIn = true
+      pairingMode = false
+      header('LOGIN BERHASIL')
+      mainMenu()
     }
 
     /* ===== CLOSE ===== */
     if (connection === 'close') {
+      if (!loggedIn) return
       const code = lastDisconnect?.error?.output?.statusCode
-
-      // ⛔ STOP TOTAL sebelum login
-      if (!canReconnect) return
-
       if (code !== DisconnectReason.loggedOut) {
-        console.log(chalk.yellow('Reconnect...'))
-        await delay(2000)
-        connectToWhatsApp()
+        header('Reconnect...')
+        start()
       } else {
-        console.log(chalk.red('Logout. Hapus auth_session'))
+        header('Logout. Hapus auth_session.')
         process.exit(0)
       }
     }
@@ -115,45 +96,39 @@ async function connectToWhatsApp() {
 }
 
 /* ================= PAIRING ================= */
-async function startPairing() {
-  state = 'PAIRING'
-  initRL()
-  header()
+async function pairingManual() {
+  header('PAIRING MANUAL')
 
-  console.log(chalk.cyan.bold('QR GAGAL → PAIRING MANUAL'))
+  rl.question('Masukkan Nomor WA (628xxxx): ', async (num) => {
+    const clean = num.replace(/\D/g, '')
 
-  const num = await ask('Masukkan Nomor WA (628xxxx): ')
-  const clean = num.replace(/\D/g, '')
-
-  try {
-    const raw = await sock.requestPairingCode(clean)
-    const code = raw.match(/.{1,4}/g).join('-')
-    console.log(chalk.green.bold('\nKODE PAIRING:'))
-    console.log(chalk.bgGreen.black.bold(` ${code} `))
-  } catch (e) {
-    console.log('Pairing gagal:', e.message)
-    process.exit(0)
-  }
+    try {
+      const raw = await sock.requestPairingCode(clean)
+      const code = raw.match(/.{1,4}/g).join('-')
+      console.log('\nKODE PAIRING:')
+      console.log(chalk.bgGreen.black.bold(` ${code} `))
+      console.log('\nMasukkan di WhatsApp')
+    } catch (e) {
+      console.log('Pairing gagal:', e.message)
+      process.exit(0)
+    }
+  })
 }
 
 /* ================= MENU ================= */
-function MenuUtama() {
-  initRL()
-  header()
-  console.log('[1] Test Kirim')
+function mainMenu() {
+  header('Status: ONLINE')
+  console.log('[1] Test Kirim ke Diri Sendiri')
   console.log('[2] Keluar')
-  process.stdout.write('> ')
 
   rl.on('line', async (l) => {
     if (l === '1') {
       await sock.sendMessage(sock.user.id, { text: 'TEST OK' })
-      console.log('Terkirim ke diri sendiri')
+      console.log('Pesan terkirim')
     }
     if (l === '2') process.exit(0)
   })
 }
 
 /* ================= START ================= */
-process.on('SIGINT', () => process.exit(0))
-header()
-connectToWhatsApp()
+start()
